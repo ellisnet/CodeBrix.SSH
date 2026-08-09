@@ -1,0 +1,177 @@
+using SilverAssertions;
+using System;
+using System.Collections.Generic;
+using System.Net;
+using System.Net.Sockets;
+using System.Threading;
+using CodeBrix.SSH.Channels;
+using CodeBrix.SSH.Common;
+using CodeBrix.SSH.Tests.Common;
+using CodeBrix.TestMocks.Mocking;
+using Microsoft.Extensions.Logging.Abstractions;
+using Xunit;
+
+namespace CodeBrix.SSH.Tests.Classes; //was previously: Renci.SshNet.Tests.Classes;
+
+public class ForwardedPortDynamicTest_Started_SocketSendShutdownImmediately : IDisposable
+{
+    private Mock<ISession> _sessionMock;
+    private Mock<IChannelDirectTcpip> _channelMock;
+    private Mock<IConnectionInfo> _connectionInfoMock;
+    private ForwardedPortDynamic _forwardedPort;
+    private Socket _client;
+    private IList<EventArgs> _closingRegister;
+    private IList<ExceptionEventArgs> _exceptionRegister;
+    private TimeSpan _connectionTimeout;
+    private ManualResetEvent _channelDisposed;
+    private IPEndPoint _forwardedPortEndPoint;
+
+    public ForwardedPortDynamicTest_Started_SocketSendShutdownImmediately()
+    {
+        Initialize();
+    }
+
+    private void Initialize()
+    {
+        Arrange();
+        Act();
+    }
+
+    public void Dispose()
+    {
+        Cleanup();
+    }
+
+    private void Cleanup()
+    {
+        if (_forwardedPort != null && _forwardedPort.IsStarted)
+        {
+            _ = _sessionMock.Setup(p => p.ConnectionInfo)
+                            .Returns(_connectionInfoMock.Object);
+            _ = _connectionInfoMock.Setup(p => p.Timeout)
+                                   .Returns(TimeSpan.FromSeconds(5));
+
+            _forwardedPort.Stop();
+        }
+
+        if (_client != null)
+        {
+            if (_client.Connected)
+            {
+                _client.Shutdown(SocketShutdown.Both);
+                _client.Close();
+                _client = null;
+            }
+        }
+
+        if (_channelDisposed != null)
+        {
+            _channelDisposed.Dispose();
+            _channelDisposed = null;
+        }
+    }
+
+    private void SetupData()
+    {
+        _closingRegister = new List<EventArgs>();
+        _exceptionRegister = new List<ExceptionEventArgs>();
+        _connectionTimeout = TimeSpan.FromSeconds(5);
+        _channelDisposed = new ManualResetEvent(false);
+        _forwardedPortEndPoint = new IPEndPoint(IPAddress.Loopback, 8122);
+
+        _forwardedPort = new ForwardedPortDynamic((uint)_forwardedPortEndPoint.Port);
+        _forwardedPort.Closing += (sender, args) => _closingRegister.Add(args);
+        _forwardedPort.Exception += (sender, args) => _exceptionRegister.Add(args);
+        _forwardedPort.Session = _sessionMock.Object;
+
+        _client = new Socket(_forwardedPortEndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+    }
+
+    private void CreateMocks()
+    {
+        _sessionMock = new Mock<ISession>(MockBehavior.Strict);
+        _sessionMock.Setup(p => p.SessionLoggerFactory).Returns(NullLoggerFactory.Instance);
+        _channelMock = new Mock<IChannelDirectTcpip>(MockBehavior.Strict);
+        _connectionInfoMock = new Mock<IConnectionInfo>(MockBehavior.Strict);
+    }
+
+    private void SetupMocks()
+    {
+        var seq = new MockSequence();
+
+        _ = _sessionMock.InSequence(seq)
+                        .Setup(p => p.IsConnected)
+                        .Returns(true);
+        _ = _sessionMock.InSequence(seq)
+                        .Setup(p => p.CreateChannelDirectTcpip())
+                        .Returns(_channelMock.Object);
+        _ = _sessionMock.InSequence(seq)
+                        .Setup(p => p.ConnectionInfo)
+                        .Returns(_connectionInfoMock.Object);
+        _ = _connectionInfoMock.InSequence(seq)
+                               .Setup(p => p.Timeout)
+                               .Returns(_connectionTimeout);
+        _ = _channelMock.InSequence(seq)
+                        .Setup(p => p.Dispose())
+                        .Callback(() => _channelDisposed.Set());
+    }
+
+    private void Arrange()
+    {
+        CreateMocks();
+        SetupData();
+        SetupMocks();
+
+        _forwardedPort.Start();
+
+        _client.Connect(_forwardedPortEndPoint);
+    }
+
+    private void Act()
+    {
+        _client.Shutdown(SocketShutdown.Send);
+
+        // wait for channel to be disposed
+        _ = _channelDisposed.WaitOne(TimeSpan.FromMilliseconds(200));
+    }
+
+    [Fact]
+    public void SocketShouldNotBeConnected()
+    {
+        Assert.False(_client.Connected);
+    }
+
+    [Fact]
+    public void ForwardedPortShouldShutdownSendOnSocket()
+    {
+        var buffer = new byte[1];
+
+        var bytesReceived = _client.Receive(buffer, 0, buffer.Length, SocketFlags.None);
+
+        Assert.Equal(0, bytesReceived);
+    }
+
+    [Fact]
+    public void ClosingShouldNotHaveFired()
+    {
+        Assert.Empty(_closingRegister);
+    }
+
+    [Fact]
+    public void ExceptionShouldNeverBeFired()
+    {
+        _exceptionRegister.Count.Should().Be(0, _exceptionRegister.AsString());
+    }
+
+    [Fact]
+    public void CreateChannelDirectTcpipOnSessionShouldBeInvokedOnce()
+    {
+        _sessionMock.Verify(p => p.CreateChannelDirectTcpip(), Times.Once);
+    }
+
+    [Fact]
+    public void DisposeOnChannelShouldBeInvokedOnce()
+    {
+        _channelMock.Verify(p => p.Dispose(), Times.Once);
+    }
+}

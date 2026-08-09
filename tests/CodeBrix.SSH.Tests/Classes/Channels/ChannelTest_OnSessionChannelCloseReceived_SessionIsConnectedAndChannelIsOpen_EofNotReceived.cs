@@ -1,0 +1,125 @@
+using SilverAssertions;
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using CodeBrix.SSH.Common;
+using CodeBrix.SSH.Messages.Connection;
+using CodeBrix.SSH.Tests.Common;
+using CodeBrix.TestMocks.Mocking;
+using Xunit;
+
+namespace CodeBrix.SSH.Tests.Classes.Channels; //was previously: Renci.SshNet.Tests.Classes.Channels;
+
+public class ChannelTest_OnSessionChannelCloseReceived_SessionIsConnectedAndChannelIsOpen_EofNotReceived : ChannelTestBase
+{
+    private uint _localChannelNumber;
+    private uint _localWindowSize;
+    private uint _localPacketSize;
+    private uint _remoteChannelNumber;
+    private uint _remoteWindowSize;
+    private uint _remotePacketSize;
+    private TimeSpan _channelCloseTimeout;
+    private IList<ChannelEventArgs> _channelClosedRegister;
+    private IList<ExceptionEventArgs> _channelExceptionRegister;
+    private ManualResetEvent _channelClosedEventHandlerCompleted;
+    private ChannelStub _channel;
+
+    protected override void SetupData()
+    {
+        var random = new Random();
+
+        _localChannelNumber = (uint)random.Next(0, int.MaxValue);
+        _localWindowSize = (uint)random.Next(0, int.MaxValue);
+        _localPacketSize = (uint)random.Next(0, int.MaxValue);
+        _remoteChannelNumber = (uint)random.Next(0, int.MaxValue);
+        _remoteWindowSize = (uint)random.Next(0, int.MaxValue);
+        _remotePacketSize = (uint)random.Next(0, int.MaxValue);
+        _channelCloseTimeout = TimeSpan.FromSeconds(random.Next(10, 20));
+        _channelClosedRegister = new List<ChannelEventArgs>();
+        _channelExceptionRegister = new List<ExceptionEventArgs>();
+        _channelClosedEventHandlerCompleted = new ManualResetEvent(false);
+    }
+
+    protected override void SetupMocks()
+    {
+        var sequence = new MockSequence();
+
+        SessionMock.InSequence(sequence).Setup(p => p.IsConnected).Returns(true);
+        SessionMock.InSequence(sequence).Setup(p => p.TrySendMessage(It.Is<ChannelCloseMessage>(c => c.LocalChannelNumber == _remoteChannelNumber))).Returns(true);
+        SessionMock.InSequence(sequence).Setup(p => p.ConnectionInfo).Returns(ConnectionInfoMock.Object);
+        ConnectionInfoMock.InSequence(sequence).Setup(p => p.ChannelCloseTimeout).Returns(_channelCloseTimeout);
+        SessionMock.InSequence(sequence)
+                    .Setup(p => p.TryWait(It.IsAny<EventWaitHandle>(), _channelCloseTimeout))
+                    .Callback<WaitHandle, TimeSpan>((waitHandle, channelCloseTimeout) => waitHandle.WaitOne())
+                    .Returns(WaitResult.Success);
+    }
+
+    protected override void Arrange()
+    {
+        base.Arrange();
+
+        _channel = new ChannelStub(SessionMock.Object, _localChannelNumber, _localWindowSize, _localPacketSize);
+        _channel.Closed += (sender, args) =>
+            {
+                _channelClosedRegister.Add(args);
+                Thread.Sleep(100);
+                _channelClosedEventHandlerCompleted.Set();
+            };
+        _channel.Exception += (sender, args) => _channelExceptionRegister.Add(args);
+        _channel.InitializeRemoteChannelInfo(_remoteChannelNumber, _remoteWindowSize, _remotePacketSize);
+        _channel.SetIsOpen(true);
+    }
+
+    protected override void Act()
+    {
+        SessionMock.Raise(p => p.ChannelCloseReceived += null,
+            new MessageEventArgs<ChannelCloseMessage>(new ChannelCloseMessage(_localChannelNumber)));
+    }
+
+    [Fact]
+    public void IsOpenShouldReturnFalse()
+    {
+        Assert.False(_channel.IsOpen);
+    }
+
+    [Fact]
+    public void TrySendMessageOnSessionShouldBeInvokedOnceForChannelCloseMessage()
+    {
+        SessionMock.Verify(
+            p => p.TrySendMessage(It.Is<ChannelCloseMessage>(c => c.LocalChannelNumber == _remoteChannelNumber)),
+            Times.Once);
+    }
+
+    [Fact]
+    public void TrySendMessageOnSessionShouldNeverBeInvokedForChannelEofMessage()
+    {
+        SessionMock.Verify(
+            p => p.TrySendMessage(It.Is<ChannelEofMessage>(c => c.LocalChannelNumber == _remoteChannelNumber)),
+            Times.Never);
+    }
+
+    [Fact]
+    public void TryWaitOnSessionShouldBeInvokedOnce()
+    {
+        SessionMock.Verify(p => p.TryWait(It.IsAny<EventWaitHandle>(), _channelCloseTimeout), Times.Once);
+    }
+
+    [Fact]
+    public void ClosedEventShouldHaveFiredOnce()
+    {
+        Assert.Single(_channelClosedRegister);
+        Assert.Equal(_localChannelNumber, _channelClosedRegister[0].ChannelNumber);
+    }
+
+    [Fact]
+    public void ExceptionShouldNeverHaveFired()
+    {
+        _channelExceptionRegister.Count.Should().Be(0, _channelExceptionRegister.AsString());
+    }
+
+    [Fact]
+    public void ChannelCloseReceivedShouldBlockUntilClosedEventHandlerHasCompleted()
+    {
+        Assert.True(_channelClosedEventHandlerCompleted.WaitOne(0));
+    }
+}

@@ -1,0 +1,23 @@
+namespace CodeBrix.SSH.Sftp.Responses; //was previously: Renci.SshNet.Sftp.Responses;
+
+internal sealed class SftpAttrsResponse : SftpResponse
+{
+    public override SftpMessageTypes SftpMessageType
+    {
+        get { return SftpMessageTypes.Attrs; }
+    }
+
+    public SftpFileAttributes Attributes { get; private set; }
+
+    public SftpAttrsResponse(uint protocolVersion)
+        : base(protocolVersion)
+    {
+    }
+
+    protected override void LoadData()
+    {
+        base.LoadData();
+
+        Attributes = ReadAttributes();
+    }
+}

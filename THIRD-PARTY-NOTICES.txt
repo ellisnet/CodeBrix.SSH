@@ -1,0 +1,283 @@
+THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
+
+CodeBrix.SSH is a Secure Shell (SSH-2) library for .NET, providing SSH command
+execution, an interactive shell, SFTP, SCP, and port forwarding.
+
+CodeBrix.SSH is a fork of the SSH.NET project. Substantially all of the source
+code in this repository is derived from SSH.NET, and one file within SSH.NET is
+in turn derived from a separately-licensed BCrypt implementation. Both upstream
+projects are recorded below, with their license texts reproduced in full.
+
+Note that NuGet package dependencies are NOT listed here -- those packages ship
+with their own license and notice files, and their source code is not
+incorporated into this repository. They are, for the library:
+CodeBrix.Cryptography.MitLicenseForever and
+Microsoft.Extensions.Logging.Abstractions; and for the test project only:
+xunit.v3, CodeBrix.TestMocks.ApacheLicenseForever and
+SilverAssertions.ApacheLicenseForever.
+
+Note that upstream SSH.NET depends on BouncyCastle.Cryptography for its
+asymmetric cryptography. This fork instead depends on
+CodeBrix.Cryptography.MitLicenseForever, the CodeBrix fork of BouncyCastle.NET,
+which presents the same API under CodeBrix.Cryptography namespaces. No
+BouncyCastle package remains anywhere in this repository's dependency graph.
+
+================================================================================
+
+1. SSH.NET
+
+   Project:    SSH.NET
+   Source:     https://github.com/sshnet/SSH.NET
+   Version:    2025.1.0 (git tag "2025.1.0"), plus six individually selected
+               post-release commits listed under "Post-2025.1.0 commits" below
+   Copyright:  Copyright (c) Renci, Oleg Kapeljushnik, Gert Driesen and
+               contributors
+   License:    MIT
+
+   Scope of incorporation
+   ----------------------
+   Every .cs file under src/CodeBrix.SSH/ is derived from the corresponding file
+   under src/Renci.SshNet/ in the SSH.NET repository at tag 2025.1.0 (with the
+   six later commits noted below applied on top), and every such file carries a
+   `//was previously: <upstream-namespace>;` provenance comment on its namespace
+   declaration.
+
+   Every .cs file under tests/CodeBrix.SSH.Tests/ is derived from the
+   corresponding file under test/Renci.SshNet.Tests/ in the same upstream
+   repository and tag, and carries the same provenance comment.
+
+   The binary test fixtures under tests/CodeBrix.SSH.Tests/Data/ (private keys,
+   public keys, OpenSSH certificates and related sample data used by the test
+   suite) are copied verbatim from test/Data/ in the same upstream repository
+   and tag.
+
+   Post-2025.1.0 commits
+   ---------------------
+   Six commits made upstream after the 2025.1.0 tag were selected and applied on
+   top of it, adapted to this fork's namespace, file layout and nullable
+   conventions. They are unreleased upstream at the time of writing and are
+   expected to ship in SSH.NET 2025.1.1:
+
+     330e9331  Truncate local file in ScpClient.Download (#1729, closes #648)
+               ScpClient.Download opened the local file with OpenWrite, which
+               does not truncate, so downloading over a larger existing file
+               left the old trailing bytes in place.
+
+     25a931ca  ScpClient: allow disabling the "-d" flag (#1751, fixes #1746)
+               Adds ScpClient.UseDirectoryFlag. Defaults to true, so the
+               default behaviour is unchanged.
+
+     adbb68e6  Add UploadFileAsync overload with canOverride (#1750, fixes #1734)
+
+     0ff2c507  SftpClient: add IProgress to DownloadFileAsync and
+               UploadFileAsync (#1771, fixes #1765). Adds the public types
+               DownloadFileProgressReport and UploadFileProgressReport.
+
+     89f378a0  Keep APM and sync UploadFile/DownloadFile callbacks on the
+               threadpool (#1805). Required alongside 0ff2c507, which had
+               regressed those callbacks onto the captured synchronization
+               context; this restores the 2025.1.0 behaviour via an internal
+               ThreadPoolProgress<T>.
+
+     6cb3cd9b  docs: add missing SftpPathNotFoundException documentation for
+               ListDirectory and ListDirectoryAsync (#1810)
+
+   The unit tests accompanying these commits all live in upstream's
+   Renci.SshNet.IntegrationTests project, which is not carried over (see item i
+   below), so no corresponding tests were added here.
+
+   Upstream's post-2025.1.0 packet I/O and cipher performance rework
+   (#1733, #1738, #1739, #1752, #1787, #1788, #1792, #1798) was deliberately
+   NOT taken, being unreleased, interdependent, and a rewrite of the crypto and
+   packet hot path.
+
+   Modifications made in this fork
+   -------------------------------
+   a. Namespace rename. The root namespace `Renci.SshNet` was renamed to
+      `CodeBrix.SSH`, and each sub-namespace correspondingly (for example
+      `Renci.SshNet.Sftp` became `CodeBrix.SSH.Sftp`). Public type names are
+      unchanged.
+
+   b. Target framework narrowed to net10.0. Upstream multi-targets
+      net462, netstandard2.0, net8.0 and net9.0. All framework-selection
+      `#if` / `#else` / `#endif` blocks were evaluated for a net10.0
+      compilation and the non-compiling branches removed, along with the
+      directives themselves. `#if DEBUG` blocks were left intact.
+
+      The following upstream files existed solely to serve target frameworks
+      that this fork does not target, and are therefore not present here:
+
+        src/Renci.SshNet/Abstractions/CancellationTokenSourceExtensions.cs
+        src/Renci.SshNet/Abstractions/SocketExtensions.cs
+        src/Renci.SshNet/Abstractions/StreamExtensions.cs
+        src/Renci.SshNet/Common/Lock.cs
+        src/Renci.SshNet/Common/TaskToAsyncResult.cs
+        src/Renci.SshNet/OrderedDictionary.netstandard.cs
+        src/Renci.SshNet/Security/Cryptography/Ciphers/TripleDesCipher.BlockImpl.cs
+        src/Renci.SshNet/Security/Cryptography/EcdsaKey.BouncyCastleImpl.cs
+        src/Renci.SshNet/Security/Cryptography/EcdsaKey.CngImpl.cs
+
+   c. Nullable reference type annotations removed. The CodeBrix library family
+      compiles with nullable reference types disabled, so the upstream
+      `#nullable` directives and the reference-type `?` annotations and `!`
+      null-forgiveness operators they enabled were removed. These are
+      compile-time annotations only; no runtime signature or behaviour changes
+      result.
+
+   d. Block-scoped namespaces converted to file-scoped namespaces, and using
+      directives consolidated into a single sorted block, per CodeBrix family
+      file-layout conventions.
+
+   e. Assembly version source changed. Upstream derives its version from
+      Nerdbank.GitVersioning and reads it via the generated
+      `ThisAssembly.NuGetPackageVersion` constant. This fork uses the CodeBrix
+      date-stamped MSBuild versioning scheme instead, and
+      `CodeBrix.SSH.Session` now reads the version from the assembly's
+      `AssemblyInformationalVersionAttribute` at runtime. As a consequence the
+      SSH protocol version-exchange string sent by this client is
+      `SSH-2.0-CodeBrix.SSH.SshClient.<version>` rather than
+      `SSH-2.0-Renci.SshNet.SshClient.<version>`.
+
+   f. Strong-name signing removed. Upstream signs its assemblies with
+      Renci.SshNet.snk; this fork ships unsigned assemblies, and the
+      `InternalsVisibleTo` declarations were correspondingly rewritten without
+      public keys.
+
+   g. Upstream build infrastructure not carried over: the StyleCop, Meziantou
+      and Sonar analyzer package references and their configuration, the
+      PolySharp polyfill package (unnecessary on net10.0), the Sandcastle
+      documentation project under src/Renci.SshNet/Documentation/, and the
+      upstream CI, docfx and benchmarking projects.
+
+   h. Test framework migrated from MSTest to xUnit.v3. Test class and method
+      names and the structure of each test are preserved; MSTest attributes and
+      assertions were translated to their xUnit.v3 equivalents:
+
+        - [TestClass] dropped; [TestMethod] became [Fact], or [Theory] where
+          [DataRow] (now [InlineData]) was also present.
+        - [TestCategory], [Owner] and [Description] became [Trait].
+        - [TestInitialize] / [TestCleanup] became a constructor and
+          IDisposable.Dispose for leaf test classes, and IAsyncLifetime
+          (InitializeAsync / DisposeAsync) for the eight classes used as test
+          base classes, which preserves MSTest's ordering guarantee that the
+          lifecycle runs after the object is fully constructed.
+        - The upstream TestMethodForPlatformAttribute, which reports an
+          inconclusive result off-platform, became FactForPlatformAttribute,
+          which skips instead -- xUnit has no inconclusive outcome.
+        - Assertions carrying a diagnostic message (32 sites) use
+          SilverAssertions, because xUnit's Equal, Same, Null and NotNull have
+          no message-bearing overload.
+
+   i. Test parallelisation is disabled assembly-wide. MSTest runs test classes
+      sequentially; xUnit parallelises test collections by default, which makes
+      the many tests that bind fixed local ports fail with "Address already in
+      use".
+
+   j. Mocking migrated from Moq to CodeBrix.TestMocks, which is a fork of Moq
+      with the same API under the CodeBrix.TestMocks.Mocking namespace. Only
+      the using directives and three fully-qualified references changed.
+
+   k. One upstream defect corrected: the test method
+      SessionTest_ConnectToServerFails.ConnectShouldHaveRethrownException
+      carries no [TestMethod] attribute upstream and therefore never runs. It is
+      marked [Fact] here, and passes.
+
+   l. Upstream test projects not carried over: Renci.SshNet.IntegrationTests
+      and Renci.SshNet.TestTools.OpenSSH (which require Docker and a live SSH
+      server), Renci.SshNet.Benchmarks, Renci.SshNet.IntegrationBenchmarks, and
+      Renci.SshNet.AotCompatibilityTestApp.
+
+   m. One hardening change in the test infrastructure: AsyncSocketListener's
+      DrainSocket now also catches ObjectDisposedException, matching every other
+      socket callback in that file. A peer can dispose the socket while it is
+      being drained; MSTest ignored the resulting exception, whereas xUnit
+      treats an exception escaping a background thread as a fatal run error.
+
+   n. The upstream StronglyTypedResourceBuilder-generated
+      Properties/Resources.Designer.cs was replaced with a hand-written
+      equivalent that conforms to the CodeBrix file-layout rules and exposes
+      only the members the test suite uses. Properties/Resources.resx is
+      carried over verbatim.
+
+   o. Cryptography dependency swapped. Upstream references the
+      BouncyCastle.Cryptography package (2.6.2 at the 2025.1.0 tag); this fork
+      references CodeBrix.Cryptography.MitLicenseForever instead, which is the
+      CodeBrix fork of BouncyCastle.NET 2.7.0. The API is the same, so the only
+      source change was rewriting the `Org.BouncyCastle` namespace root to
+      `CodeBrix.Cryptography` across 22 library files and 2 test files. No
+      BouncyCastle package remains in the dependency graph.
+
+   License text
+   ------------
+
+   The MIT License (MIT)
+
+   Copyright (c) Renci, Oleg Kapeljushnik, Gert Driesen and contributors
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in all
+   copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+
+================================================================================
+
+2. BCrypt
+
+   Copyright:  Copyright (c) 2006 Damien Miller <djm@mindrot.org>
+               Copyright (c) 2010 Ryan D. Emerle
+   License:    ISC-style permissive license (reproduced below)
+
+   Scope of incorporation
+   ----------------------
+   The bcrypt_pbkdf key derivation implementation used to decrypt OpenSSH-format
+   private keys. Incorporated into SSH.NET as
+   src/Renci.SshNet/Security/Cryptography/Bcrypt.cs and present in this fork as:
+
+     src/CodeBrix.SSH/Security/Cryptography/Bcrypt.cs
+
+   The original copyright header is preserved verbatim at the top of that file.
+   Modifications are limited to the namespace rename and the file-layout and
+   nullable-annotation changes described in items (a), (c) and (d) above.
+
+   License text
+   ------------
+
+   Permission to use, copy, modify, and distribute this software for any
+   purpose with or without fee is hereby granted, provided that the above
+   copyright notice and this permission notice appear in all copies.
+
+   THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+   WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+   MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+   ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+   WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+   ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+   OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+================================================================================
+
+Jeremy Ellis and contributors license the CodeBrix.SSH project
+to you under the terms set forth in the LICENSE file, which is located at
+the root of this repository.
+
+If you have any questions about any third-party code or services referenced
+here, or if you believe that any third-party code has been included in
+CodeBrix.SSH in error, please open a new issue at:
+https://github.com/ellisnet/CodeBrix.SSH/issues
+
+================================================================================
+
+END OF THIRD-PARTY SOFTWARE NOTICES AND INFORMATION

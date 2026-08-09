@@ -1,0 +1,160 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Threading;
+using CodeBrix.SSH.Common;
+using CodeBrix.SSH.Tests.Common;
+using CodeBrix.TestMocks.Mocking;
+using Xunit;
+
+namespace CodeBrix.SSH.Tests.Classes.Connection; //was previously: Renci.SshNet.Tests.Classes.Connection;
+
+public class Socks4ConnectorTest_Connect_ConnectionSucceeded : Socks4ConnectorTestBase
+{
+    private ConnectionInfo _connectionInfo;
+    private Socket _clientSocket;
+    private AsyncSocketListener _proxyServer;
+    private List<byte> _bytesReceivedByProxy;
+    private bool _disconnected;
+    private Socket _actual;
+
+    protected override void SetupData()
+    {
+        base.SetupData();
+
+        var random = new Random();
+
+        _connectionInfo = CreateConnectionInfo("proxyUser", "proxyPwd");
+        _connectionInfo.Timeout = TimeSpan.FromMilliseconds(random.Next(50, 200));
+        _bytesReceivedByProxy = new List<byte>();
+        _clientSocket = SocketFactory.Create(SocketType.Stream, ProtocolType.Tcp);
+        _actual = null;
+
+        _proxyServer = new AsyncSocketListener(new IPEndPoint(IPAddress.Loopback, _connectionInfo.ProxyPort));
+        _proxyServer.Disconnected += socket => _disconnected = true;
+        _proxyServer.BytesReceived += (bytesReceived, socket) =>
+            {
+                _bytesReceivedByProxy.AddRange(bytesReceived);
+
+                if (_bytesReceivedByProxy.Count == bytesReceived.Length)
+                {
+                    // Send SOCKS response
+                    _ = socket.Send(new byte[]
+                        {
+                            // Reply version (null byte)
+                            0x00,
+                            // Request granted
+                            0x5a,
+                            // Destination address port
+                            0x01,
+                            0xf0,
+                            // Destination address IP
+                            0x01,
+                            0x02,
+                            0x03,
+                            0x04
+                        });
+
+                    // Send extra byte to allow us to verify that connector did not consume too much
+                    _ = socket.Send(new byte[]
+                        {
+                            0xfe
+                        });
+                }
+            };
+        _proxyServer.Start();
+    }
+
+    protected override void SetupMocks()
+    {
+        _ = SocketFactoryMock.Setup(p => p.Create(SocketType.Stream, ProtocolType.Tcp))
+                             .Returns(_clientSocket);
+    }
+
+    protected override void TearDown()
+    {
+        base.TearDown();
+
+        _proxyServer?.Dispose();
+        _clientSocket?.Dispose();
+    }
+
+    protected override void Act()
+    {
+        _actual = Connector.Connect(_connectionInfo);
+
+        // Give some time to process all messages
+        Thread.Sleep(200);
+    }
+
+    [Fact]
+    public void ProxyShouldHaveReceivedExpectedSocksRequest()
+    {
+        var expectedSocksRequest = new byte[]
+            {
+                // SOCKS version
+                0x04,
+                // CONNECT request
+                0x01,
+                // Destination port
+                0x04,
+                0x06,
+                // Destination address (IPv4)
+                0x7f,
+                0x00,
+                0x00,
+                0x01,
+                // Proxy user
+                0x70,
+                0x72,
+                0x6f,
+                0x78,
+                0x79,
+                0x55,
+                0x73,
+                0x65,
+                0x72,
+                // Null terminator
+                0x00
+            };
+
+        var errorText = string.Format("Expected:{0}{1}{0}but was:{0}{2}",
+                                      Environment.NewLine,
+                                      PacketDump.Create(expectedSocksRequest, 2),
+                                      PacketDump.Create(_bytesReceivedByProxy, 2));
+
+        Assert.True(expectedSocksRequest.SequenceEqual(_bytesReceivedByProxy), errorText);
+    }
+
+    [Fact]
+    public void ConnectShouldReturnSocketCreatedUsingSocketFactory()
+    {
+        Assert.NotNull(_actual);
+        Assert.Same(_clientSocket, _actual);
+    }
+
+    [Fact]
+    public void OnlySocksResponseShouldHaveBeenConsumed()
+    {
+        var buffer = new byte[2];
+
+        Assert.Equal(1, _actual.Receive(buffer));
+        Assert.Equal(0xfe, buffer[0]);
+    }
+
+    [Fact]
+    public void ClientSocketShouldBeConnected()
+    {
+        Assert.False(_disconnected);
+        Assert.True(_actual.Connected);
+    }
+
+    [Fact]
+    public void CreateOnSocketFactoryShouldHaveBeenInvokedOnce()
+    {
+        SocketFactoryMock.Verify(p => p.Create(SocketType.Stream, ProtocolType.Tcp),
+                                 Times.Once());
+    }
+}

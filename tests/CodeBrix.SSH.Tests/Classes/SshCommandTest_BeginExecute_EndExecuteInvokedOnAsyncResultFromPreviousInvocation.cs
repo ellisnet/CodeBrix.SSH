@@ -1,0 +1,73 @@
+using System;
+using System.Globalization;
+using System.Text;
+using CodeBrix.SSH.Channels;
+using CodeBrix.SSH.Common;
+using CodeBrix.SSH.Tests.Common;
+using CodeBrix.TestMocks.Mocking;
+using Microsoft.Extensions.Logging.Abstractions;
+using Xunit;
+
+namespace CodeBrix.SSH.Tests.Classes; //was previously: Renci.SshNet.Tests.Classes;
+
+public class SshCommandTest_BeginExecute_EndExecuteInvokedOnAsyncResultFromPreviousInvocation : TestBase
+{
+    private Mock<ISession> _sessionMock;
+    private Mock<IChannelSession> _channelSessionAMock;
+    private Mock<IChannelSession> _channelSessionBMock;
+    private string _commandText;
+    private Encoding _encoding;
+    private SshCommand _sshCommand;
+    private IAsyncResult _asyncResultA;
+    private IAsyncResult _asyncResultB;
+
+    protected override void OnInit()
+    {
+        base.OnInit();
+
+        Arrange();
+        Act();
+    }
+
+    private void Arrange()
+    {
+        var random = new Random();
+
+        _sessionMock = new Mock<ISession>(MockBehavior.Strict);
+        _sessionMock.Setup(p => p.SessionLoggerFactory).Returns(NullLoggerFactory.Instance);
+        _channelSessionAMock = new Mock<IChannelSession>(MockBehavior.Strict);
+        _channelSessionBMock = new Mock<IChannelSession>(MockBehavior.Strict);
+        _commandText = random.Next().ToString(CultureInfo.InvariantCulture);
+        _encoding = Encoding.UTF8;
+        _asyncResultA = null;
+        _asyncResultB = null;
+
+        var seq = new MockSequence();
+        _sessionMock.InSequence(seq).Setup(p => p.CreateChannelSession()).Returns(_channelSessionAMock.Object);
+        _channelSessionAMock.InSequence(seq).Setup(p => p.Open());
+        _channelSessionAMock.InSequence(seq).Setup(p => p.SendExecRequest(_commandText))
+            .Returns(true)
+            .Raises(c => c.Closed += null, new ChannelEventArgs(5));
+        _channelSessionAMock.InSequence(seq).Setup(p => p.Dispose());
+
+        _sshCommand = new SshCommand(_sessionMock.Object, _commandText, _encoding);
+        _asyncResultA = _sshCommand.BeginExecute();
+        _sshCommand.EndExecute(_asyncResultA);
+
+        _sessionMock.InSequence(seq).Setup(p => p.CreateChannelSession()).Returns(_channelSessionBMock.Object);
+        _channelSessionBMock.InSequence(seq).Setup(p => p.Open());
+        _channelSessionBMock.InSequence(seq).Setup(p => p.SendExecRequest(_commandText)).Returns(true);
+    }
+
+    private void Act()
+    {
+        _asyncResultB = _sshCommand.BeginExecute();
+    }
+
+    [Fact]
+    public void BeginExecuteShouldReturnNewAsyncResult()
+    {
+        Assert.NotNull(_asyncResultB);
+        Assert.NotSame(_asyncResultA, _asyncResultB);
+    }
+}

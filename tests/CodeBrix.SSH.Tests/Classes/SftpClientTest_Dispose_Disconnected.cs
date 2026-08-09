@@ -1,0 +1,121 @@
+using System;
+using CodeBrix.TestMocks.Mocking;
+using Xunit;
+
+namespace CodeBrix.SSH.Tests.Classes; //was previously: Renci.SshNet.Tests.Classes;
+
+public class SftpClientTest_Dispose_Disconnected : SftpClientTestBase
+{
+    private SftpClient _sftpClient;
+    private ConnectionInfo _connectionInfo;
+
+    private int _operationTimeout;
+
+    protected override void SetupData()
+    {
+        _connectionInfo = new ConnectionInfo("host", "user", new NoneAuthenticationMethod("userauth"));
+        _operationTimeout = new Random().Next(1000, 10000);
+        _sftpClient = new SftpClient(_connectionInfo, false, ServiceFactoryMock.Object)
+        {
+            OperationTimeout = TimeSpan.FromMilliseconds(_operationTimeout)
+        };
+    }
+
+    protected override void SetupMocks()
+    {
+        var sequence = new MockSequence();
+
+        _ = ServiceFactoryMock.InSequence(sequence)
+                               .Setup(p => p.CreateSocketFactory())
+                               .Returns(SocketFactoryMock.Object);
+        _ = ServiceFactoryMock.InSequence(sequence)
+                               .Setup(p => p.CreateSession(_connectionInfo, SocketFactoryMock.Object))
+                               .Returns(SessionMock.Object);
+        _ = SessionMock.InSequence(sequence)
+                        .Setup(p => p.Connect());
+        _ = ServiceFactoryMock.InSequence(sequence)
+                               .Setup(p => p.CreateSftpResponseFactory())
+                               .Returns(SftpResponseFactoryMock.Object);
+        _ = ServiceFactoryMock.InSequence(sequence)
+                               .Setup(p => p.CreateSftpSession(SessionMock.Object, _operationTimeout, _connectionInfo.Encoding, SftpResponseFactoryMock.Object))
+                               .Returns(SftpSessionMock.Object);
+        _ = SftpSessionMock.InSequence(sequence)
+                            .Setup(p => p.Connect());
+        _ = SessionMock.InSequence(sequence)
+                        .Setup(p => p.OnDisconnecting());
+        _ = SftpSessionMock.InSequence(sequence)
+                            .Setup(p => p.Dispose());
+        _ = SessionMock.InSequence(sequence)
+                        .Setup(p => p.Dispose());
+    }
+
+    protected override void Arrange()
+    {
+        base.Arrange();
+
+        _sftpClient.Connect();
+        _sftpClient.Disconnect();
+    }
+
+    protected override void Act()
+    {
+        _sftpClient.Dispose();
+    }
+
+    [Fact]
+    public void CreateSftpMessageFactoryOnServiceFactoryShouldBeInvokedOnce()
+    {
+        ServiceFactoryMock.Verify(p => p.CreateSftpResponseFactory(), Times.Once);
+    }
+
+    [Fact]
+    public void CreateSftpSessionOnServiceFactoryShouldBeInvokedOnce()
+    {
+        ServiceFactoryMock.Verify(
+            p => p.CreateSftpSession(SessionMock.Object, _operationTimeout, _connectionInfo.Encoding, SftpResponseFactoryMock.Object),
+            Times.Once);
+    }
+
+    [Fact]
+    public void CreateSocketFactoryOnServiceFactoryShouldBeInvokedOnce()
+    {
+        ServiceFactoryMock.Verify(p => p.CreateSocketFactory(), Times.Once);
+    }
+
+    [Fact]
+    public void CreateSessionOnServiceFactoryShouldBeInvokedOnce()
+    {
+        ServiceFactoryMock.Verify(p => p.CreateSession(_connectionInfo, SocketFactoryMock.Object),
+                                   Times.Once);
+    }
+
+    [Fact]
+    public void DisconnectOnNetConfSessionShouldNeverBeInvoked()
+    {
+        SftpSessionMock.Verify(p => p.Disconnect(), Times.Never);
+    }
+
+    [Fact]
+    public void DisconnectOnSessionShouldNeverBeInvoked()
+    {
+        SessionMock.Verify(p => p.Disconnect(), Times.Never);
+    }
+
+    [Fact]
+    public void DisposeOnNetConfSessionShouldBeInvokedOnce()
+    {
+        SftpSessionMock.Verify(p => p.Dispose(), Times.Once);
+    }
+
+    [Fact]
+    public void DisposeOnSessionShouldBeInvokedOnce()
+    {
+        SessionMock.Verify(p => p.Dispose(), Times.Once);
+    }
+
+    [Fact]
+    public void OnDisconnectingOnSessionShouldBeInvokedOnce()
+    {
+        SessionMock.Verify(p => p.OnDisconnecting(), Times.Once);
+    }
+}

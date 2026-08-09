@@ -1,0 +1,72 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using CodeBrix.SSH.Common;
+using CodeBrix.TestMocks.Mocking;
+using Microsoft.Extensions.Logging.Abstractions;
+using Xunit;
+
+namespace CodeBrix.SSH.Tests.Classes; //was previously: Renci.SshNet.Tests.Classes;
+
+public class SubsystemSession_Dispose_NeverConnected
+{
+    private Mock<ISession> _sessionMock;
+    private string _subsystemName;
+    private SubsystemSessionStub _subsystemSession;
+    private int _operationTimeout;
+    private IList<EventArgs> _disconnectedRegister;
+    private IList<ExceptionEventArgs> _errorOccurredRegister;
+
+    public SubsystemSession_Dispose_NeverConnected()
+    {
+        Setup();
+    }
+
+    private void Setup()
+    {
+        Arrange();
+        Act();
+    }
+
+    protected void Arrange()
+    {
+        var random = new Random();
+
+        _subsystemName = random.Next().ToString(CultureInfo.InvariantCulture);
+        _operationTimeout = 30000;
+        _disconnectedRegister = new List<EventArgs>();
+        _errorOccurredRegister = new List<ExceptionEventArgs>();
+
+        _sessionMock = new Mock<ISession>(MockBehavior.Strict);
+        _sessionMock.Setup(p => p.SessionLoggerFactory).Returns(NullLoggerFactory.Instance);
+
+        _subsystemSession = new SubsystemSessionStub(_sessionMock.Object,
+                                                     _subsystemName,
+                                                     _operationTimeout);
+        _subsystemSession.Disconnected += (sender, args) => _disconnectedRegister.Add(args);
+        _subsystemSession.ErrorOccurred += (sender, args) => _errorOccurredRegister.Add(args);
+    }
+
+    protected void Act()
+    {
+        _subsystemSession.Dispose();
+    }
+
+    [Fact]
+    public void DisconnectHasNeverFired()
+    {
+        Assert.Empty(_disconnectedRegister);
+    }
+
+    [Fact]
+    public void ErrorOccurredHasNeverFired()
+    {
+        Assert.Empty(_errorOccurredRegister);
+    }
+
+    [Fact]
+    public void IsOpenShouldReturnFalse()
+    {
+        Assert.False(_subsystemSession.IsOpen);
+    }
+}

@@ -1,0 +1,49 @@
+using System.Net;
+using CodeBrix.SSH.Connection;
+using CodeBrix.SSH.Tests.Common;
+using CodeBrix.TestMocks.Mocking;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace CodeBrix.SSH.Tests.Classes.Connection; //was previously: Renci.SshNet.Tests.Classes.Connection;
+
+public abstract class Socks4ConnectorTestBase : TripleATestBase
+{
+    internal Mock<ISocketFactory> SocketFactoryMock { get; private set; }
+    internal Socks4Connector Connector { get; private set; }
+    internal SocketFactory SocketFactory { get; private set; }
+
+    protected virtual void CreateMocks()
+    {
+        SocketFactoryMock = new Mock<ISocketFactory>(MockBehavior.Strict);
+    }
+
+    protected virtual void SetupData()
+    {
+        Connector = new Socks4Connector(SocketFactoryMock.Object, NullLoggerFactory.Instance);
+        SocketFactory = new SocketFactory();
+    }
+
+    protected virtual void SetupMocks()
+    {
+    }
+
+    protected sealed override void Arrange()
+    {
+        CreateMocks();
+        SetupData();
+        SetupMocks();
+    }
+
+    protected ConnectionInfo CreateConnectionInfo(string proxyUser, string proxyPassword)
+    {
+        return new ConnectionInfo(IPAddress.Loopback.ToString(),
+                                  1030,
+                                  "user",
+                                  ProxyTypes.Socks4,
+                                  IPAddress.Loopback.ToString(),
+                                  8122,
+                                  proxyUser,
+                                  proxyPassword,
+                                  new KeyboardInteractiveAuthenticationMethod("user"));
+    }
+}
