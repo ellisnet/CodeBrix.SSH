@@ -31,6 +31,9 @@ public sealed class ShellStream : Stream
     private System.Net.ArrayBuffer _readBuffer;
     private System.Net.ArrayBuffer _writeBuffer;
 
+    private volatile bool _autoFlush;
+    private volatile bool _disableReadBuffering;
+
     private bool _disposed;
 
     /// <summary>
@@ -61,6 +64,83 @@ public sealed class ShellStream : Stream
             lock (_sync)
             {
                 return _readBuffer.ActiveLength > 0;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the byte-oriented write methods
+    /// (<see cref="Write(byte[], int, int)"/>, <see cref="Write(ReadOnlySpan{byte})"/>,
+    /// <see cref="WriteByte(byte)"/> and their asynchronous counterparts) automatically
+    /// call <see cref="Flush"/> after each write. The default is <see langword="false"/>.
+    /// </summary>
+    /// <value>
+    /// <see langword="true"/> if every byte-oriented write is immediately flushed to the
+    /// channel; otherwise, <see langword="false"/>.
+    /// </value>
+    /// <remarks>
+    /// The string-oriented <see cref="Write(string)"/> and <see cref="WriteLine(string)"/>
+    /// methods always flush, regardless of the value of this property.
+    /// </remarks>
+    public bool AutoFlush
+    {
+        get { return _autoFlush; }
+        set { _autoFlush = value; }
+    }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether incoming data bypasses the internal read
+    /// buffer and is delivered solely via the <see cref="DataReceived"/> event. The default
+    /// is <see langword="false"/>.
+    /// </summary>
+    /// <value>
+    /// <see langword="true"/> if incoming data is delivered only via <see cref="DataReceived"/>;
+    /// <see langword="false"/> if incoming data is also committed to the internal read buffer.
+    /// </value>
+    /// <remarks>
+    /// <para>
+    /// This is an opt-in for event-style consumers (such as interactive terminal hosts) that
+    /// receive all data via <see cref="DataReceived"/> and never read from the stream: without
+    /// it, the internal read buffer grows without bound because nothing drains it.
+    /// </para>
+    /// <para>
+    /// While this property is <see langword="true"/>, the buffer-reading members —
+    /// <see cref="Read()"/>, <see cref="Read(byte[], int, int)"/>, <see cref="Read(Span{byte})"/>,
+    /// <see cref="ReadByte"/>, <see cref="ReadLine()"/> and the <c>Expect</c>/<c>BeginExpect</c>
+    /// overloads — throw <see cref="InvalidOperationException"/> instead of blocking on a buffer
+    /// that will never fill. A thread already blocked in one of those members is woken and
+    /// throws when the property is set to <see langword="true"/>.
+    /// </para>
+    /// <para>
+    /// Setting this property to <see langword="true"/> discards any data currently in the read
+    /// buffer (an event subscriber has already received a copy of every byte). Set it back to
+    /// <see langword="false"/> to resume buffering from that point on. Ideally, set it once,
+    /// right after creating the <see cref="ShellStream"/> and before any data arrives.
+    /// </para>
+    /// </remarks>
+    public bool DisableReadBuffering
+    {
+        get
+        {
+            return _disableReadBuffering;
+        }
+        set
+        {
+            lock (_sync)
+            {
+                if (_disableReadBuffering == value)
+                {
+                    return;
+                }
+
+                _disableReadBuffering = value;
+
+                if (value)
+                {
+                    _readBuffer.Discard(_readBuffer.ActiveLength);
+                }
+
+                Monitor.PulseAll(_sync);
             }
         }
     }
@@ -380,6 +460,8 @@ public sealed class ShellStream : Stream
         {
             while (true)
             {
+                ThrowIfReadBufferingDisabled();
+
                 var searchHead = lookback == -1
                     ? 0
                     : Math.Max(0, _readBuffer.ActiveLength - lookback);
@@ -462,6 +544,8 @@ public sealed class ShellStream : Stream
         {
             while (true)
             {
+                ThrowIfReadBufferingDisabled();
+
                 var bufferText = GetString(_readBuffer.ActiveLength);
 
                 var searchStart = lookback == -1
@@ -574,6 +658,8 @@ public sealed class ShellStream : Stream
     /// </returns>
     public IAsyncResult BeginExpect(TimeSpan timeout, int lookback, AsyncCallback callback, object state, params ExpectAction[] expectActions)
     {
+        ThrowIfReadBufferingDisabled();
+
         return TaskToAsyncResult.Begin(Task.Run(() => ExpectRegex(timeout, lookback, expectActions)), callback, state);
     }
 
@@ -638,6 +724,8 @@ public sealed class ShellStream : Stream
         {
             while (true)
             {
+                ThrowIfReadBufferingDisabled();
+
                 var indexOfCr = _readBuffer.ActiveReadOnlySpan.IndexOf(_carriageReturnBytes);
 
                 if (indexOfCr >= 0)
@@ -735,6 +823,14 @@ public sealed class ShellStream : Stream
         }
     }
 
+    private void ThrowIfReadBufferingDisabled()
+    {
+        if (_disableReadBuffering)
+        {
+            throw new InvalidOperationException("The internal read buffer is disabled because DisableReadBuffering is set. Receive data via the DataReceived event instead.");
+        }
+    }
+
     /// <summary>
     /// Reads all of the text currently available in the shell.
     /// </summary>
@@ -745,6 +841,8 @@ public sealed class ShellStream : Stream
     {
         lock (_sync)
         {
+            ThrowIfReadBufferingDisabled();
+
             var text = GetString(_readBuffer.ActiveLength);
 
             _readBuffer.Discard(_readBuffer.ActiveLength);
@@ -766,9 +864,13 @@ public sealed class ShellStream : Stream
     {
         lock (_sync)
         {
+            ThrowIfReadBufferingDisabled();
+
             while (_readBuffer.ActiveLength == 0 && !_disposed)
             {
                 _ = Monitor.Wait(_sync);
+
+                ThrowIfReadBufferingDisabled();
             }
 
             var bytesRead = Math.Min(buffer.Length, _readBuffer.ActiveLength);
@@ -850,6 +952,11 @@ public sealed class ShellStream : Stream
 
             buffer = buffer.Slice(bytesToCopy);
         }
+
+        if (_autoFlush)
+        {
+            Flush();
+        }
     }
 
     /// <inheritdoc/>
@@ -888,6 +995,11 @@ public sealed class ShellStream : Stream
 
             buffer = buffer.Slice(bytesToCopy);
         }
+
+        if (_autoFlush)
+        {
+            await FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc/>
@@ -916,6 +1028,40 @@ public sealed class ShellStream : Stream
         // By default, the terminal driver translates carriage return to line feed on input.
         // See option ICRLF at https://www.man7.org/linux/man-pages/man3/termios.3.html.
         Write(line + (_noTerminal ? "\n" : "\r"));
+    }
+
+    /// <summary>
+    /// Writes the specified text to the shell and immediately flushes any buffered data
+    /// to the channel.
+    /// </summary>
+    /// <param name="text">The text to be written to the shell.</param>
+    /// <remarks>
+    /// Equivalent to calling <see cref="Write(string)"/> followed by <see cref="Flush"/>.
+    /// If <paramref name="text"/> is <see langword="null"/>, nothing is written, but any
+    /// previously buffered data is still flushed.
+    /// </remarks>
+    /// <exception cref="ObjectDisposedException">The stream is closed.</exception>
+    public void WriteAndFlush(string text)
+    {
+        Write(text);
+        Flush();
+    }
+
+    /// <summary>
+    /// Writes a sequence of bytes to the shell and immediately flushes the buffered data
+    /// to the channel.
+    /// </summary>
+    /// <param name="buffer">An array of bytes. <paramref name="count"/> bytes are copied from <paramref name="buffer"/> to the shell.</param>
+    /// <param name="offset">The zero-based byte offset in <paramref name="buffer"/> at which to begin copying bytes to the shell.</param>
+    /// <param name="count">The number of bytes to be written to the shell.</param>
+    /// <remarks>
+    /// Equivalent to calling <see cref="Write(byte[], int, int)"/> followed by <see cref="Flush"/>.
+    /// </remarks>
+    /// <exception cref="ObjectDisposedException">The stream is closed.</exception>
+    public void WriteAndFlush(byte[] buffer, int offset, int count)
+    {
+        Write(buffer, offset, count);
+        Flush();
     }
 
     /// <inheritdoc/>
@@ -976,13 +1122,16 @@ public sealed class ShellStream : Stream
     {
         lock (_sync)
         {
-            _readBuffer.EnsureAvailableSpace(e.Data.Count);
+            if (!_disableReadBuffering)
+            {
+                _readBuffer.EnsureAvailableSpace(e.Data.Count);
 
-            e.Data.AsSpan().CopyTo(_readBuffer.AvailableSpan);
+                e.Data.AsSpan().CopyTo(_readBuffer.AvailableSpan);
 
-            _readBuffer.Commit(e.Data.Count);
+                _readBuffer.Commit(e.Data.Count);
 
-            Monitor.PulseAll(_sync);
+                Monitor.PulseAll(_sync);
+            }
         }
 
         DataReceived?.Invoke(this, new ShellDataEventArgs(e.Data.ToArray()));

@@ -30,6 +30,16 @@ for the commit list):
   * SftpClient.DownloadFileAsync and UploadFileAsync accept an
     IProgress&lt;DownloadFileProgressReport&gt; / IProgress&lt;UploadFileProgressReport&gt;.
 
+Beyond those upstream fixes, the fork carries CodeBrix-original additions with
+no SSH.NET counterpart (marked "not in SSH.NET" where documented below):
+
+  * ShellStream conveniences for interactive terminal hosts: AutoFlush,
+    WriteAndFlush, and the opt-in DisableReadBuffering. See the ShellStream
+    section.
+  * The CodeBrix.SSH.KnownHosts namespace: an OpenSSH known_hosts file store
+    plus ready-made strict and trust-on-first-use host key verification
+    policies. See "Host key verification" in the CORE API REFERENCE.
+
 
 INSTALLATION
 --------------------------------------------------------------------------------
@@ -79,7 +89,8 @@ KEY NAMESPACE
 
     using CodeBrix.SSH;
 
-Sub-namespaces, all of which map one-to-one onto the SSH.NET originals:
+Sub-namespaces, which map one-to-one onto the SSH.NET originals except for
+CodeBrix.SSH.KnownHosts (new in this fork):
 
     CodeBrix.SSH                    Clients, connection info, authentication
                                     methods, forwarded ports, shell types.
@@ -95,6 +106,8 @@ Sub-namespaces, all of which map one-to-one onto the SSH.NET originals:
     CodeBrix.SSH.Channels           SSH channel implementations.
     CodeBrix.SSH.Connection         Direct and proxied connectors.
     CodeBrix.SSH.Compression        Compression algorithms.
+    CodeBrix.SSH.KnownHosts         known_hosts host key verification (new in
+                                    this fork; no SSH.NET counterpart).
     CodeBrix.SSH.Abstractions       Internal platform abstractions.
     CodeBrix.SSH.NetConf            NETCONF over SSH.
 
@@ -118,6 +131,16 @@ SshClient
     Key members: Connect / ConnectAsync, Disconnect, IsConnected, RunCommand,
     CreateCommand, CreateShell, CreateShellStream, AddForwardedPort,
     RemoveForwardedPort, ForwardedPorts, ConnectionInfo, KeepAliveInterval.
+
+    KeepAliveInterval enables periodic keep-alive messages on an otherwise
+    idle connection. Set it BEFORE calling Connect(); 30 seconds is a
+    reasonable value for a long-lived interactive session.
+
+    RunCommand opens a fresh exec channel per call on the already-
+    authenticated connection, so it is safe to call while an interactive
+    ShellStream is live on the same client: probing commands and an open
+    terminal multiplex on separate channels without interfering with each
+    other in either direction.
 
 SftpClient
     SFTP file transfer and remote file system operations. Synchronous and
@@ -179,8 +202,119 @@ ForwardedPortLocal / ForwardedPortRemote / ForwardedPortDynamic
     AddForwardedPort and started with Start.
 
 ShellStream
-    A Stream over an interactive shell session, with Expect / ExpectAsync,
-    ReadLine, WriteLine and Read for terminal automation.
+    A Stream over an interactive shell session, obtained from
+    SshClient.CreateShellStream. It serves two distinct consumption styles:
+    scripted automation (Expect / ExpectAsync, ReadLine, WriteLine) and
+    interactive terminal hosting (Read / Write plus the DataReceived event).
+
+        using ShellStream shell = client.CreateShellStream(
+            "xterm-256color", columns: 120, rows: 30, width: 0, height: 0,
+            bufferSize: 4096);
+
+    The terminalName argument is passed through verbatim and becomes TERM on
+    the remote side.
+
+    INTERACTIVE CONSUMPTION PATTERN (terminal hosts). Use a dedicated reader
+    thread in a blocking Read() loop. Read() blocks until output arrives and
+    returns 0 when the channel closes, which doubles as the disconnect
+    signal:
+
+        var buffer = new byte[4096];
+        int n;
+        while ((n = shell.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            terminal.Feed(buffer, 0, n);    // render the chunk
+        }
+        // n == 0: channel closed -- tear down the session UI here.
+
+    The ErrorOccurred event supplies a human-readable reason to show when the
+    read loop ends abnormally, and Closed fires when the channel closes.
+
+    PITFALL -- DataReceived does not replace Read(). Every incoming chunk is
+    committed to the internal read buffer AND raised via DataReceived; the
+    two are not alternatives. A consumer that subscribes to DataReceived and
+    never calls Read() leaves every byte of session output accumulating in
+    the internal read buffer for the life of the session, growing it without
+    bound. Event-style consumers must opt in to DisableReadBuffering (below),
+    or simply use the Read() loop above.
+
+    DisableReadBuffering (not in SSH.NET; opt-in, default false). When set to
+    true, incoming data is delivered solely via DataReceived and is never
+    committed to the internal read buffer, eliminating the unbounded growth
+    described above. While it is set, the buffer-reading members (Read,
+    ReadLine, Expect, BeginExpect and friends) throw
+    InvalidOperationException rather than block on a buffer that will never
+    fill -- it is strictly for event-style consumers. Set it once,
+    immediately after CreateShellStream. Setting it to true discards
+    anything already buffered; setting it back to false resumes buffering
+    from that point.
+
+    WRITES ARE BUFFERED -- call Flush to send. The byte-oriented writes
+    (Write(byte[], int, int), Write(ReadOnlySpan<byte>), WriteByte,
+    WriteAsync) accumulate in a write buffer and reach the wire only when
+    Flush() is called or the buffer fills. Nothing fails when Flush is
+    forgotten; the session just sits silent. The string-oriented
+    Write(string) and WriteLine(string) always flush automatically. Two
+    conveniences (not in SSH.NET) remove the boilerplate for terminal hosts,
+    where every keystroke batch must be flushed:
+
+        shell.AutoFlush = true;           // byte-oriented writes now flush
+        shell.WriteAndFlush(bytes, 0, n); // explicit write-plus-flush
+        shell.WriteAndFlush(text);        //   (byte[] and string overloads)
+
+    ChangeWindowSize(columns, rows, width, height) sends the PTY
+    window-change request for live terminal resizing. It is easy to assume
+    missing (SSH.NET lore includes long-open "no public resize"
+    discussions), but it is present and works; call it whenever the hosting
+    control is resized. After Read/Write it is the most important
+    ShellStream member for interactive use.
+
+Host key verification (CodeBrix.SSH.KnownHosts -- new in this fork)
+    By default nothing verifies the server's host key; the client's
+    HostKeyReceived event decides. Accept-all is one line and acceptable for
+    a dev tool:
+
+        client.HostKeyReceived += (_, e) => e.CanTrust = true;
+
+    For the ground between "verify nothing" and hand-written known-hosts
+    logic, the CodeBrix.SSH.KnownHosts namespace provides a store and two
+    ready-made policies, as extension methods on any client (SSH, SFTP,
+    SCP):
+
+        using CodeBrix.SSH.KnownHosts;
+
+        var store = new KnownHostsStore(KnownHostsStore.DefaultFilePath);
+
+        client.UseTrustOnFirstUse(store);              // TOFU
+        client.UseStrictHostKeyVerification(store);    // known keys only
+
+        client.UseTrustOnFirstUse(store, mismatch =>
+        {
+            // Changed or revoked key -- warn, return true to proceed anyway.
+            ShowHostKeyWarning(mismatch.Host, mismatch.Port,
+                               mismatch.FingerPrintSHA256, mismatch.Result);
+            return false;
+        });
+
+    Call one policy method per client, after construction and before
+    Connect(). Strict trusts only keys already in the store and never writes
+    to it. Trust-on-first-use trusts known keys, trusts and records unknown
+    keys (saving the store immediately), and rejects changed (Mismatch) or
+    revoked (Revoked) keys -- or defers those to the callback overload,
+    whose return value decides; accepting a mismatch never modifies the
+    store.
+
+    KnownHostsStore reads and writes the OpenSSH known_hosts format: plain
+    and [host]:port entries, comma-separated host lists, * and ? wildcards,
+    ! negation, hashed |1| host lines and the @revoked marker are honored
+    when reading (@cert-authority lines are ignored -- host certificates are
+    out of scope). Entries it appends are plain-hostname lines. Point it at
+    the user's own file -- DefaultFilePath resolves ~/.ssh/known_hosts on
+    Linux/macOS and %USERPROFILE%\.ssh\known_hosts on Windows (the OpenSSH
+    client bundled with Windows uses that same location) -- or at an
+    application-specific file, which Save() creates on demand, with
+    owner-only permissions on Linux/macOS. Verify/Add/Save are thread-safe,
+    and both LF and CRLF files are accepted.
 
 SshNetLoggingConfiguration
     Static configuration for the library's internal logging.
