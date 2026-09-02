@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
-using Xunit;
+using Xunit.Sdk;   // ParallelMode
+using Xunit.v3;    // ParallelizationAttribute
 
 [assembly: ExcludeFromCodeCoverage] //was previously: test/Renci.SshNet/Properties/AssemblyInfo.cs
 
@@ -8,4 +9,4 @@ using Xunit;
 // upstream never had to think about it; xUnit parallelises test collections by
 // default, which makes those tests collide with "Address already in use".
 // Running sequentially restores the upstream execution model.
-[assembly: CollectionBehavior(DisableTestParallelization = true)]
+[assembly: Parallelization(Mode = ParallelMode.None)]

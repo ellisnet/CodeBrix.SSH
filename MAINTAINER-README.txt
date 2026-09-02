@@ -27,9 +27,16 @@ REPOSITORY LAYOUT
 ================================================================================
 
     CodeBrix.SSH.slnx           Solution. Solution Items folder carries
-                                AGENT-README.txt, icon-codebrix-128.png,
-                                LICENSE, README.md and THIRD-PARTY-NOTICES.txt;
+                                .gitignore, AGENT-README.txt,
+                                EXTRAS-README.txt, global.json,
+                                icon-codebrix-128.png, LICENSE,
+                                MAINTAINER-README.txt, README-INDEX.txt,
+                                README.md and THIRD-PARTY-NOTICES.txt;
                                 the Tests folder carries the test project.
+
+    global.json                 Selects the Microsoft.Testing.Platform test
+                                runner. Does NOT pin an SDK version. See
+                                BUILDING and TESTING below.
 
     src/CodeBrix.SSH/
         *.cs                    Public entry points at the project root:
@@ -89,8 +96,17 @@ BUILDING
     dotnet build   CodeBrix.SSH.slnx
 
 Requirements: the .NET 10 SDK. Nothing else -- no native toolchain, no Docker,
-no SSH server. There is no global.json, so the newest installed .NET 10 SDK is
-used.
+no SSH server.
+
+global.json at the repo root does NOT pin an SDK version, so the newest
+installed .NET 10 SDK is still used. It exists solely to select the test
+runner:
+
+    { "test": { "runner": "Microsoft.Testing.Platform" } }
+
+Because that setting lives in global.json rather than in the csproj, it applies
+to every `dotnet test` run anywhere in the repository, including CI. Keep the
+file committed -- see TESTING for what breaks without it.
 
 The build must be 0 warnings / 0 errors. <GenerateDocumentationFile> is true,
 so every public and protected member needs an XML doc comment; fix CS1591 by
@@ -111,6 +127,21 @@ entirely self-contained: it runs offline, needs no SSH server and needs no
 Docker. The upstream integration tests (which require Testcontainers and a
 live sshd) and the benchmark projects are deliberately not part of this
 repository.
+
+A clean run is 2370 tests: 2358 passed, 12 skipped, 0 failed. The 12 skips are
+intentional, not breakage -- 4 are Linux-only platform gates (see
+FactForPlatformAttribute) and 8 belong to one channel-dispose test class that
+upstream SSH.NET disables with a class-level [Ignore]:
+
+    ChannelTest_Dispose_SessionIsConnectedAndChannelIsOpen_
+        EofNotReceived_SendEofInvoked
+
+THE TEST RUNNER IS Microsoft.Testing.Platform (MTP), selected by global.json at
+the repo root. Do not delete that file. Without it, `dotnet test` silently
+falls back to the older VSTest bridge, which is the only place the flake
+described below has ever been seen. You can tell which one ran: MTP output ends
+in a "Test run summary:" block, while the VSTest bridge invokes MSBuild with
+`--target:VSTest`.
 
 Test dependencies: xunit.v3, xunit.runner.visualstudio, Microsoft.NET.Test.Sdk,
 CodeBrix.TestMocks.ApacheLicenseForever and
@@ -133,6 +164,21 @@ tests/CodeBrix.SSH.Tests/Properties/AssemblyInfo.cs. Many of these tests bind
 listeners to fixed local ports, so running collections concurrently makes them
 fail with "Address already in use". Do not remove that attribute.
 
+WINDOWS FIREWALL. On Windows the first run raises a Windows Defender Firewall
+prompt for CodeBrix.SSH.Tests, because the suite binds real TCP listeners on
+localhost (tests/CodeBrix.SSH.Tests/Common/AsyncSocketListener.cs) and several
+tests drive a stub SSH server. Grant it; private networks are enough. If the
+prompt is dismissed, or a blocking rule is already in place, the socket-based
+tests fail with a flood of
+
+    SocketException (10054): An existing connection was forcibly closed by
+    the remote host
+
+which reads like a defect in the library but is not. The firewall rule is
+per-machine and per-user-profile, so a new machine, a fresh Windows profile or
+a rebuilt firewall ruleset brings the prompt back on a suite that previously
+passed. Check this first when the suite fails on Windows having worked before.
+
 Any call inside a test that accepts a CancellationToken must be passed
 TestContext.Current.CancellationToken, or xUnit1051 fires.
 
@@ -148,12 +194,15 @@ and treats them as a fatal run error, even though no test failed. The
 exception varies between runs (Broken pipe, ObjectDisposedException) and no
 stack trace reaches the VSTest adapter.
 
-It has only ever been observed through the VSTest bridge. Running the test
-assembly directly with the native xUnit v3 runner has been consistently clean:
+It has only ever been observed through the VSTest bridge. Both supported paths
+have been consistently clean: `dotnet test` with global.json in place (MTP),
+and running the test assembly directly with the native xUnit v3 runner:
 
     tests/CodeBrix.SSH.Tests/bin/Debug/net10.0/CodeBrix.SSH.Tests
 
-Prefer that command when a reliable exit code matters.
+Prefer the direct runner when a reliable exit code matters. If `dotnet test`
+produces this failure, confirm that global.json is still present before
+investigating anything else.
 
 
 PACKAGING AND PUBLISHING
