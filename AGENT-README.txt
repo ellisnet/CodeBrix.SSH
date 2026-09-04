@@ -24,17 +24,18 @@ Everything is managed code -- there are no native binaries, no P/Invoke into
 an OpenSSH or libssh installation, and no OS-specific behaviour beyond the
 default known_hosts path. The library runs anywhere .NET 10 runs.
 
-PROVENANCE. CodeBrix.SSH is a fork of SSH.NET 2025.1.0
+PROVENANCE. CodeBrix.SSH is a fork of SSH.NET
 (https://github.com/sshnet/SSH.NET), narrowed to net10.0 and rehomed under the
-CodeBrix.SSH root namespace. Every public type keeps its upstream name, and
+CodeBrix.SSH root namespace. The exact upstream release this fork is based on
+is recorded in THIRD-PARTY-NOTICES.txt. Every public type keeps its upstream name, and
 every sub-namespace maps one-to-one (Renci.SshNet.X becomes CodeBrix.SSH.X),
 so migrating an existing SSH.NET consumer is normally a package swap plus a
 find-and-replace of "Renci.SshNet" to "CodeBrix.SSH" in using directives and
 fully-qualified names. Do NOT write upstream namespaces; they do not exist in
 this package.
 
-The public surface is a small SUPERSET of SSH.NET 2025.1.0. Additions a
-consumer can rely on:
+The public surface is a small SUPERSET of the upstream SSH.NET surface.
+Additions a consumer can rely on:
 
   * ScpClient.Download truncates the local file rather than leaving stale
     trailing bytes when overwriting a larger existing file.
@@ -1017,7 +1018,7 @@ SCP (ScpClient)
     IRemotePathTransformation has a single member, string Transform(string
     path), so a custom rule is a small class.
   * Download(string, FileInfo) truncates the local file (a fork fix; upstream
-    2025.1.0 left stale trailing bytes when overwriting a larger file).
+    left stale trailing bytes when overwriting a larger file).
 
 
 INTERACTIVE SHELL: ShellStream AND Shell
