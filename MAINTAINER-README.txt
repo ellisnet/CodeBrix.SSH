@@ -120,7 +120,12 @@ produces a .nupkg.
 TESTING
 ================================================================================
 
-    dotnet test CodeBrix.SSH.slnx
+    dotnet build CodeBrix.SSH.slnx
+    tests/CodeBrix.SSH.Tests/bin/Debug/net10.0/CodeBrix.SSH.Tests -parallel none
+
+RUN WITH -parallel none FOR NOW. A plain `dotnet test CodeBrix.SSH.slnx` runs
+the test collections in parallel and produces about 50 spurious failures. See
+"PARALLELISATION MUST BE FORCED OFF ON THE COMMAND LINE" below.
 
 The suite is a port of the upstream SSH.NET unit tests to xUnit.v3 and is
 entirely self-contained: it runs offline, needs no SSH server and needs no
@@ -128,10 +133,11 @@ Docker. The upstream integration tests (which require Testcontainers and a
 live sshd) and the benchmark projects are deliberately not part of this
 repository.
 
-A clean run is 2370 tests: 2358 passed, 12 skipped, 0 failed. The 12 skips are
-intentional, not breakage -- 4 are Linux-only platform gates (see
-FactForPlatformAttribute) and 8 belong to one channel-dispose test class that
-upstream SSH.NET disables with a class-level [Ignore]:
+A clean run -- with -parallel none -- is 2370 tests: 2358 passed, 12 skipped,
+0 failed. The 12 skips are intentional, not breakage -- 4 are Linux-only
+platform gates (see FactForPlatformAttribute) and 8 belong to one
+channel-dispose test class that upstream SSH.NET disables with a class-level
+[Ignore]:
 
     ChannelTest_Dispose_SessionIsConnectedAndChannelIsOpen_
         EofNotReceived_SendEofInvoked
@@ -164,6 +170,41 @@ tests/CodeBrix.SSH.Tests/Properties/AssemblyInfo.cs. Many of these tests bind
 listeners to fixed local ports, so running collections concurrently makes them
 fail with "Address already in use". Do not remove that attribute.
 
+PARALLELISATION MUST BE FORCED OFF ON THE COMMAND LINE (as of 2026-09-06).
+That assembly attribute is currently NOT being honoured, so parallelisation has
+to be disabled per run:
+
+    tests/CodeBrix.SSH.Tests/bin/Debug/net10.0/CodeBrix.SSH.Tests -parallel none
+
+Measured on Windows against xunit.v3 4.0.0:
+
+    direct runner, no arguments     Total 2370, Failed 50
+    direct runner, -parallel none   Total 2370, Failed  0
+    dotnet test (MTP)               crashes mid-run -- reports only 2169 of
+                                    2370 tests with "failed: 0" and exits
+                                    -532462766 (0xE0434352, a CLR unhandled
+                                    exception)
+
+All 50 failures are the same collision, raised from AsyncSocketListener.Start():
+
+    SocketException : Only one usage of each socket address
+    (protocol/network address/port) is normally permitted
+
+SUSPECTED CAUSE -- not confirmed, and deliberately not fixed yet. AssemblyInfo
+carries
+
+    [assembly: Parallelization(Mode = ParallelMode.None)]
+
+and Xunit.Sdk.ParallelMode.None is the enum's zero value, so it cannot be
+told apart from "never set"; xunit appears to fall back to its default of
+-parallelMode collections. The pre-upgrade attribute
+[assembly: CollectionBehavior(DisableTestParallelization = true)] is still
+present in xunit.v3 4.0.0, but reverting to it has NOT been tested.
+
+The switch is spelled -parallelMode none in the runner's own -? output;
+-parallel none is also accepted and is the form these results were measured
+with.
+
 WINDOWS FIREWALL. On Windows the first run raises a Windows Defender Firewall
 prompt for CodeBrix.SSH.Tests, because the suite binds real TCP listeners on
 localhost (tests/CodeBrix.SSH.Tests/Common/AsyncSocketListener.cs) and several
@@ -194,15 +235,18 @@ and treats them as a fatal run error, even though no test failed. The
 exception varies between runs (Broken pipe, ObjectDisposedException) and no
 stack trace reaches the VSTest adapter.
 
-It has only ever been observed through the VSTest bridge. Both supported paths
-have been consistently clean: `dotnet test` with global.json in place (MTP),
-and running the test assembly directly with the native xUnit v3 runner:
+It is not confined to the VSTest bridge. A direct-runner pass with
+-parallel none that reported Failed: 0 still exited 2 after a
 
-    tests/CodeBrix.SSH.Tests/bin/Debug/net10.0/CodeBrix.SSH.Tests
+    [FATAL ERROR] System.Net.Sockets.SocketException
 
-Prefer the direct runner when a reliable exit code matters. If `dotnet test`
-produces this failure, confirm that global.json is still present before
-investigating anything else.
+so a non-zero exit alongside "Failed: 0" is this flake, not a test failure.
+Read the summary line rather than trusting the exit code:
+
+    tests/CodeBrix.SSH.Tests/bin/Debug/net10.0/CodeBrix.SSH.Tests -parallel none
+
+If `dotnet test` produces this failure, confirm that global.json is still
+present before investigating anything else.
 
 
 PACKAGING AND PUBLISHING
