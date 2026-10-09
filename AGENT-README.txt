@@ -110,7 +110,7 @@ KEY NAMESPACES / USINGS
     using CodeBrix.SSH.KnownHosts;  // KnownHostsStore and the verification
                                     // policy extension methods
 
-The complete namespace map, with the number of public types in each:
+The complete namespace map:
 
     CodeBrix.SSH                       Clients (SshClient, SftpClient,
                                        ScpClient, NetConfClient, BaseClient),
@@ -191,7 +191,7 @@ clients.
     value for a long-lived interactive session.
   * ErrorOccurred surfaces asynchronous errors raised on the session's
     background threads -- errors that have no call to throw out of.
-  * HostKeyReceived fires once per connection, during the key exchange, before
+  * HostKeyReceived is raised once per connection, during the key exchange, before
     authentication. See HOST KEY VERIFICATION below.
   * ServerIdentificationReceived carries the server's version banner as an
     SshIdentification (ProtocolVersion, SoftwareVersion, Comments).
@@ -326,7 +326,7 @@ SshCommand
     marked as stderr.
   * ExitStatus is null when the server reported no exit status; a command
     killed by a signal reports ExitSignal instead (ABRT, ALRM, FPE, HUP, ILL,
-    INT, KILL, PIPE, QUIT, SEGV, TER, USR1, USR2 per RFC 4254 6.10).
+    INT, KILL, PIPE, QUIT, SEGV, TERM, USR1, USR2 per RFC 4254 6.10).
   * CommandTimeout defaults to Timeout.InfiniteTimeSpan. When set, exceeding
     it throws SshOperationTimeoutException from the execute call.
   * ExecuteAsync's cancellation token does not abandon the command locally --
@@ -470,7 +470,7 @@ Failure). You supply instances; the library calls them.
         public NoneAuthenticationMethod(string username);
     }
 
-  * PasswordExpired fires when the server demands a password change; set
+  * PasswordExpired is raised when the server demands a password change; set
     AuthenticationPasswordChangeEventArgs.NewPassword (a byte[]) to supply the
     replacement.
   * NoneAuthenticationMethod is chiefly a probe: servers answer it with the
@@ -1128,7 +1128,7 @@ returns 0 when the channel closes, which doubles as the disconnect signal:
     // n == 0: channel closed -- tear down the session UI here.
 
 The ErrorOccurred event supplies a human-readable reason to show when the read
-loop ends abnormally, and Closed fires when the channel closes.
+loop ends abnormally, and Closed is raised when the channel closes.
 
 PITFALL -- DataReceived does not replace Read(). Every incoming chunk is
 committed to the internal read buffer AND raised via DataReceived
